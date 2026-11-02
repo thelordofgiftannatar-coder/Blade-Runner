@@ -1,0 +1,116 @@
+name: Build Blade Runner 2049 Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Check project files
+        run: |
+          echo "Checking project files..."
+          test -f package.json || {
+            echo "ERROR: package.json is missing."
+            exit 1
+          }
+          test -f capacitor.config.json || {
+            echo "ERROR: capacitor.config.json is missing."
+            exit 1
+          }
+          echo "Project files found."
+
+      - name: Install project dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check Capacitor configuration
+        run: |
+          node -e "
+            const p = require('./package.json');
+            console.log('Project:', p.name || 'Unnamed');
+            console.log('Scripts:', JSON.stringify(p.scripts || {}));
+            console.log('Capacitor core:',
+              p.dependencies?.['@capacitor/core'] ||
+              p.devDependencies?.['@capacitor/core'] ||
+              'Not declared');
+          "
+          npx cap --version
+
+      - name: Ensure Android platform is installed
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+      - name: Build web application
+        run: |
+          node -e "
+            const p = require('./package.json');
+            process.exit(p.scripts?.build ? 0 : 1);
+          " && npm run build || {
+            echo "No successful web build detected."
+            echo "Checking whether the project has existing web files."
+            test -f index.html || {
+              echo "ERROR: No build script or root index.html found."
+              exit 1
+            }
+          }
+
+      - name: Check Capacitor web directory
+        run: |
+          node -e "
+            const fs = require('fs');
+            const c = require('./capacitor.config.json');
+            const d = c.webDir || 'www';
+            console.log('Configured web directory:', d);
+            if (!fs.existsSync(d)) {
+              console.error('Web directory does not exist:', d);
+              process.exit(1);
+            }
+            if (!fs.existsSync(d + '/index.html')) {
+              console.error('index.html is missing from:', d);
+              process.exit(1);
+            }
+          "
+
+      - name: Sync web files with Android
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blade-Runner-2049-Android-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
